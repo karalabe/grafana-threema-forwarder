@@ -3,7 +3,7 @@ module github.com/karalabe/grafana-threema-forwarder
 go 1.17
 
 require (
-	github.com/karalabe/go-threema v0.0.0-20220206180028-1722b7db06ad
+	github.com/karalabe/go-threema v0.0.0-20220209181311-4bbff907809b
 	github.com/spf13/cobra v1.3.0
 	github.com/spf13/viper v1.10.1
 )
@@ -21,6 +21,7 @@ require (
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/subosito/gotenv v1.2.0 // indirect
 	golang.org/x/crypto v0.0.0-20220131195533-30dcbda58838 // indirect
+	golang.org/x/image v0.0.0-20211028202545-6944b10bf410 // indirect
 	golang.org/x/sys v0.0.0-20211210111614-af8b64212486 // indirect
 	golang.org/x/text v0.3.7 // indirect
 	gopkg.in/ini.v1 v1.66.2 // indirect

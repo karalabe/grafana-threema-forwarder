@@ -7,6 +7,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"strings"
@@ -70,20 +71,30 @@ func forwarder(cmd *cobra.Command, args []string) {
 			Title   string `json:"title"`
 			Message string `json:"message"`
 			Image   string `json:"imageUrl"`
+			Matches []struct {
+				Metric string  `json:"metric"`
+				Value  float64 `json:"value"`
+			} `json:"evalMatches"`
 		})
 		if err := json.NewDecoder(req.Body).Decode(alert); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		// If an image was attached, try to download it
-
-		// Connect to the Threema network and send the alert message
-		log.Println("Connecting to the Threema network")
-		conn, err := threema.Connect(id, new(threema.Handler)) // Ignore message
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to connect to the Threema network: %v", err), http.StatusInternalServerError)
-			return
+		var (
+			image    []byte
+			imageErr error
+		)
+		if len(alert.Image) != 0 {
+			res, err := http.Get(alert.Image)
+			if err != nil {
+				imageErr = err
+			} else {
+				image, imageErr = ioutil.ReadAll(res.Body)
+				res.Body.Close()
+			}
 		}
+		// Prepare the alert message
 		var icon string
 		switch alert.State {
 		case "alerting":
@@ -93,17 +104,36 @@ func forwarder(cmd *cobra.Command, args []string) {
 		default:
 			icon = alert.State
 		}
+		message := "*" + icon + " " + alert.Title + "*\n\n"
+		if imageErr != nil {
+			message = message + "Failed to attach image: " + imageErr.Error() + "\n\n"
+		}
+		message = message + alert.Message + "\n\n"
+
+		for _, item := range alert.Matches {
+			message = message + fmt.Sprintf("*%s*: _%v_\n", item.Metric, item.Value)
+		}
+		// Connect to the Threema network and send the alert message
+		log.Println("Connecting to the Threema network")
+		conn, err := threema.Connect(id, new(threema.Handler)) // Ignore message
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to connect to the Threema network: %v", err), http.StatusInternalServerError)
+			return
+		}
 		for _, to := range tos {
 			log.Printf("Sending alert message to %s", to)
-			if err := conn.SendText(to, icon+"️ "+alert.Title); err != nil {
-				log.Printf("Failed to send alert title: %v", err)
-				http.Error(w, fmt.Sprintf("Failed to send alert title: %v", err), http.StatusInternalServerError)
-				return
-			}
-			if err := conn.SendText(to, alert.Message); err != nil {
-				log.Printf("Failed to send alert message: %v", err)
-				http.Error(w, fmt.Sprintf("Failed to send alert message: %v", err), http.StatusInternalServerError)
-				return
+			if len(image) > 0 {
+				if err := conn.SendImage(to, image, message); err != nil {
+					log.Printf("Failed to send alert image: %v", err)
+					http.Error(w, fmt.Sprintf("Failed to send alert image: %v", err), http.StatusInternalServerError)
+					return
+				}
+			} else {
+				if err := conn.SendText(to, message); err != nil {
+					log.Printf("Failed to send alert message: %v", err)
+					http.Error(w, fmt.Sprintf("Failed to send alert message: %v", err), http.StatusInternalServerError)
+					return
+				}
 			}
 			log.Println("Alert message sent")
 		}
