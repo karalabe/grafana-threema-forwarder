@@ -84,7 +84,6 @@ func forwarder(cmd *cobra.Command, args []string) {
 			http.Error(w, fmt.Sprintf("Failed to connect to the Threema network: %v", err), http.StatusInternalServerError)
 			return
 		}
-		log.Println("Sending alert message")
 		var icon string
 		switch alert.State {
 		case "alerting":
@@ -94,15 +93,20 @@ func forwarder(cmd *cobra.Command, args []string) {
 		default:
 			icon = alert.State
 		}
-		if err := conn.SendText(recipientIDFlag, icon+"️ "+alert.Title); err != nil {
-			http.Error(w, fmt.Sprintf("Failed to send alert title: %v", err), http.StatusInternalServerError)
-			return
+		for _, to := range tos {
+			log.Printf("Sending alert message to %s", to)
+			if err := conn.SendText(to, icon+"️ "+alert.Title); err != nil {
+				log.Printf("Failed to send alert title: %v", err)
+				http.Error(w, fmt.Sprintf("Failed to send alert title: %v", err), http.StatusInternalServerError)
+				return
+			}
+			if err := conn.SendText(to, alert.Message); err != nil {
+				log.Printf("Failed to send alert message: %v", err)
+				http.Error(w, fmt.Sprintf("Failed to send alert message: %v", err), http.StatusInternalServerError)
+				return
+			}
+			log.Println("Alert message sent")
 		}
-		if err := conn.SendText(recipientIDFlag, alert.Message); err != nil {
-			http.Error(w, fmt.Sprintf("Failed to send alert message: %v", err), http.StatusInternalServerError)
-			return
-		}
-		log.Println("Alert message sent")
 		conn.Close()
 	})
 	http.ListenAndServe("0.0.0.0:8000", nil)
