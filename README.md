@@ -2,7 +2,7 @@
 
 Although Grafana has built in support for pushing alerts to Threema, it is done through the Treema Gateway, which costs about $0.15 for every alert (message + image + thumbnail x $0.05). Furthermore, the Threema Gateway costs $64 to gain access. This might be acceptable for low-traffic production system, but for personal use, it's wonky.
 
-This project implements a Threema notification channel for Grafana using the `[go-threema](https://github.com/karalabe/go-threema)` library. This approach relies on a personal Threema account, which - although still licensed - is a small, one time expense.
+This project implements a Threema notification channel for Grafana using the [`go-threema`](https://github.com/karalabe/go-threema) library. This approach relies on a personal Threema account, which - although still licensed - is a small, one time expense.
 
 Unfortunately, Grafana does not accept new notification channels implementations into their codebase. The reasoning is that they would like to ship plugin support for alerts, which has been in the [backlog since 2019](https://github.com/grafana/grafana/issues/16004). As such, this project is forced to implement a webhook server that Grafana can ping on alerts.
 
