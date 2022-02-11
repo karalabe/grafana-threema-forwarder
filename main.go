@@ -71,6 +71,7 @@ func forwarder(cmd *cobra.Command, args []string) {
 			Title   string `json:"title"`
 			Message string `json:"message"`
 			Image   string `json:"imageUrl"`
+			Link    string `json:"ruleUrl"`
 			Matches []struct {
 				Metric string  `json:"metric"`
 				Value  float64 `json:"value"`
@@ -98,9 +99,15 @@ func forwarder(cmd *cobra.Command, args []string) {
 		var icon string
 		switch alert.State {
 		case "alerting":
-			icon = "⚠"
+			icon = "🔥"
+			if strings.HasPrefix(alert.Title, "[Alerting]") {
+				alert.Title = alert.Title[10:]
+			}
 		case "ok":
-			icon = "💚"
+			icon = "☘️"
+			if strings.HasPrefix(alert.Title, "[OK]") {
+				alert.Title = alert.Title[4:]
+			}
 		default:
 			icon = alert.State
 		}
@@ -111,8 +118,13 @@ func forwarder(cmd *cobra.Command, args []string) {
 		message = message + alert.Message + "\n\n"
 
 		for _, item := range alert.Matches {
-			message = message + fmt.Sprintf("*%s*: _%v_\n", item.Metric, item.Value)
+			message = message + fmt.Sprintf("*%s*: _%.2f_\n", item.Metric, item.Value)
 		}
+		if len(alert.Matches) > 0 {
+			message = message + "\n"
+		}
+		message = message + alert.Link
+
 		// Connect to the Threema network and send the alert message
 		log.Println("Connecting to the Threema network")
 		conn, err := threema.Connect(id, new(threema.Handler)) // Ignore message
