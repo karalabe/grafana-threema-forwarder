@@ -62,11 +62,15 @@ func forwarder(cmd *cobra.Command, args []string) {
 			log.Fatalf("Failed to add recipient %d as contact: %v", i, err)
 		}
 	}
+	// Start the publisher goroutine to feed alerts to Threema
+	alerts := make(chan *alert)
+	go publisher(id, tos, alerts)
+
 	// Create a forwarder REST service that accepts Grafana webhook POSTs,
 	// converts them into Threema messages and relays them to the recipient.
 	http.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 		// Retrieve the alert from the Grafana notification
-		alert := new(struct {
+		event := new(struct {
 			State   string `json:"state"`
 			Title   string `json:"title"`
 			Message string `json:"message"`
@@ -77,7 +81,7 @@ func forwarder(cmd *cobra.Command, args []string) {
 				Value  float64 `json:"value"`
 			} `json:"evalMatches"`
 		})
-		if err := json.NewDecoder(req.Body).Decode(alert); err != nil {
+		if err := json.NewDecoder(req.Body).Decode(event); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -86,8 +90,8 @@ func forwarder(cmd *cobra.Command, args []string) {
 			image    []byte
 			imageErr error
 		)
-		if len(alert.Image) != 0 {
-			res, err := http.Get(alert.Image)
+		if len(event.Image) != 0 {
+			res, err := http.Get(event.Image)
 			if err != nil {
 				imageErr = err
 			} else {
@@ -97,59 +101,91 @@ func forwarder(cmd *cobra.Command, args []string) {
 		}
 		// Prepare the alert message
 		var icon string
-		switch alert.State {
+		switch event.State {
 		case "alerting":
 			icon = "🔥"
-			if strings.HasPrefix(alert.Title, "[Alerting]") {
-				alert.Title = alert.Title[10:]
+			if strings.HasPrefix(event.Title, "[Alerting]") {
+				event.Title = event.Title[10:]
 			}
 		case "ok":
 			icon = "☘️"
-			if strings.HasPrefix(alert.Title, "[OK]") {
-				alert.Title = alert.Title[4:]
+			if strings.HasPrefix(event.Title, "[OK]") {
+				event.Title = event.Title[4:]
 			}
 		default:
-			icon = alert.State
+			icon = event.State
 		}
-		message := "*" + icon + " " + alert.Title + "*\n\n"
+		message := "*" + icon + " " + event.Title + "*\n\n"
 		if imageErr != nil {
 			message = message + "Failed to attach image: " + imageErr.Error() + "\n\n"
 		}
-		message = message + alert.Message + "\n\n"
+		message = message + event.Message + "\n\n"
 
-		for _, item := range alert.Matches {
+		for _, item := range event.Matches {
 			message = message + fmt.Sprintf("*%s*: _%.2f_\n", item.Metric, item.Value)
 		}
-		if len(alert.Matches) > 0 {
+		if len(event.Matches) > 0 {
 			message = message + "\n"
 		}
-		message = message + alert.Link
+		message = message + event.Link
 
-		// Connect to the Threema network and send the alert message
+		// Queue the message for Threema publishing
+		alerts <- &alert{
+			message: message,
+			image:   image,
+		}
+	})
+	http.ListenAndServe("0.0.0.0:8000", nil)
+}
+
+// alert is a helper struct to feed alerts over a channel to the publisher.
+type alert struct {
+	message string // Message content of the alert, always present
+	image   []byte // Image content of the alert, optional
+}
+
+// publisher is an indefinite goroutine that keeps waiting for incoming alerts
+// and publishes them over Threema. It's simpler to run a separate goroutine as
+// it lower the number of reconnects in simultaneous alerts and also avoids the
+// concurrency caused by the HTTP handler.
+func publisher(id *threema.Identity, tos []string, alerts chan *alert) {
+	for {
+		// Wait for the next alert to arrive
+		alert := <-alerts
+
+		// Connect to the Threema network and send the alert message, looping
+		// if a new one arrived in the meantime.
 		log.Println("Connecting to the Threema network")
 		conn, err := threema.Connect(id, new(threema.Handler)) // Ignore message
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to connect to the Threema network: %v", err), http.StatusInternalServerError)
-			return
+			log.Printf("Failed to connect to the Threema network: %v", err)
+			continue // Alert lost - c'est la vie - maybe we'll succeed next time
 		}
-		for _, to := range tos {
-			log.Printf("Sending alert message to %s", to)
-			if len(image) > 0 {
-				if err := conn.SendImage(to, image, message); err != nil {
-					log.Printf("Failed to send alert image: %v", err)
-					http.Error(w, fmt.Sprintf("Failed to send alert image: %v", err), http.StatusInternalServerError)
-					return
+		for alert != nil {
+			// Send the alert to all recipients
+			for _, to := range tos {
+				log.Printf("Sending alert message to %s", to)
+				if len(alert.image) > 0 {
+					if err := conn.SendImage(to, alert.image, alert.message); err != nil {
+						log.Printf("Failed to send alert image: %v", err)
+						continue // Alert lost - c'est la vie - maybe we'll succeed for the next user
+					}
+				} else {
+					if err := conn.SendText(to, alert.message); err != nil {
+						log.Printf("Failed to send alert message: %v", err)
+						continue // Alert lost - c'est la vie - maybe we'll succeed for the next user
+					}
 				}
-			} else {
-				if err := conn.SendText(to, message); err != nil {
-					log.Printf("Failed to send alert message: %v", err)
-					http.Error(w, fmt.Sprintf("Failed to send alert message: %v", err), http.StatusInternalServerError)
-					return
-				}
+				log.Println("Alert message sent")
 			}
-			log.Println("Alert message sent")
+			// Check if there are more alerts queued up
+			select {
+			case alert = <-alerts:
+			default:
+				alert = nil
+			}
 		}
+		// All alerts queued up have been sent, disconnect
 		conn.Close()
-	})
-	http.ListenAndServe("0.0.0.0:8000", nil)
+	}
 }
